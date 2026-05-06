@@ -277,7 +277,7 @@ def main():
     project_root = os.path.dirname(script_dir)  # 上一级目录
     
     input_csv = os.path.join(project_root, 'Dataset/statics2011/AllData_student_step_2011F.csv')
-    output_dir = os.path.join(project_root, 'Dataset')
+    output_dir = os.path.join(project_root, 'Dataset', 'statics2011')
     train_output = os.path.join(output_dir, 'Statics2011_pid_train.csv')
     test_output = os.path.join(output_dir, 'Statics2011_pid_test.csv')
     hypergraph_output = os.path.join(output_dir, 'H', 'statics2011.csv')

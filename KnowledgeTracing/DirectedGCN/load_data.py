@@ -33,18 +33,24 @@ def get_adj():
         raise FileNotFoundError(f'Cannot find train pid file for dataset={C.DATASET} under {dataset_dir}')
 
     with open(path, 'r', encoding='UTF-8-sig') as train:
-        for len, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[train] * 4), desc='Generate adjacency matrix:    ',
-                                           mininterval=2):
-            len = int(len.strip().strip(','))
+        for len_line, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[train] * 4), desc='Generate adjacency matrix:    ',
+                                                mininterval=2):
             ques = np.array(ques.strip().strip(',').split(',')).astype(int)
             ans = np.array(ans.strip().strip(',').split(',')).astype(int)
-            if len > 1:
-                for i in range(len):
+            seq_len = min(len(ques), len(ans))
+            ques = ques[:seq_len]
+            ans = ans[:seq_len]
+            if seq_len > 1:
+                for i in range(seq_len):
                     if ans[i] == 0:
                         ques[i] += q
 
-                for j in range(len - 1):
-                    resout[ques[j] - 1][ques[j + 1] - 1] += 1
+                for j in range(seq_len - 1):
+                    src = int(ques[j] - 1)
+                    dst = int(ques[j + 1] - 1)
+                    if src < 0 or dst < 0 or src >= 2 * q or dst >= 2 * q:
+                        continue
+                    resout[src][dst] += 1
     resin = resout.T
     resout = normalize(resout + sp.eye(resout.shape[0]))
     resin = normalize(resin + sp.eye(resin.shape[0]))

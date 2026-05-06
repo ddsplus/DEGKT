@@ -313,7 +313,7 @@ def main():
     
     input_train = os.path.join(project_root, 'Dataset/xes3g5m/train.csv')
     input_test = os.path.join(project_root, 'Dataset/xes3g5m/test.csv')
-    output_dir = os.path.join(project_root, 'Dataset')
+    output_dir = os.path.join(project_root, 'Dataset', 'xes3g5m')
     
     train_output = os.path.join(output_dir, 'xes3g5m_pid_train.csv')
     test_output = os.path.join(output_dir, 'xes3g5m_pid_test.csv')
