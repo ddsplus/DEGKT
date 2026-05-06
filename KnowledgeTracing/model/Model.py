@@ -19,11 +19,12 @@ class DKT(nn.Module):
         '''initial feature'''
         emb_dim = C.EMB
         emb = nn.Embedding(2 * C.NUM_OF_QUESTIONS, emb_dim)
-        self.ques = emb(torch.LongTensor([i for i in range(2 * C.NUM_OF_QUESTIONS)])).cuda()
+        ques_ids = torch.arange(2 * C.NUM_OF_QUESTIONS, dtype=torch.long)
+        self.register_buffer("ques", emb(ques_ids))
         '''generate two graphs'''
-        self.G = G
-        self.adj_out = adj_out
-        self.adj_in = adj_in
+        self.register_buffer("G", G)
+        self.register_buffer("adj_out", adj_out)
+        self.register_buffer("adj_in", adj_in)
         '''DGCN'''
         self.net1 = GCN(nfeat=C.EMB, nhid=C.EMB, nclass=int(C.EMB / 2))
         self.net2 = GCN(nfeat=C.EMB, nhid=C.EMB, nclass=int(C.EMB / 2))

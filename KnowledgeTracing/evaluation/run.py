@@ -3,6 +3,7 @@
 
 import argparse
 import importlib
+import inspect
 import json
 import logging
 import os
@@ -99,6 +100,43 @@ def save_checkpoint(model, config, metrics_dict, output_dir: str, epoch: int) ->
     return path
 
 
+def build_model(model_cls, config, graph_inputs):
+    """Instantiate model with a compatible calling convention.
+
+    This repo historically used `DKT(hidden_dim, layer_dim, G, adj_in, adj_out)`.
+    Some runners use newer signatures like `Model(config, graph_inputs)`.
+    """
+    try:
+        sig = inspect.signature(model_cls.__init__)
+        param_names = [p.name for p in list(sig.parameters.values())[1:]]  # drop `self`
+    except (TypeError, ValueError):
+        param_names = []
+
+    # Newer style: (config, graph_inputs)
+    if len(param_names) == 2:
+        return model_cls(config, graph_inputs)
+    if "config" in param_names and "graph_inputs" in param_names:
+        return model_cls(config=config, graph_inputs=graph_inputs)
+
+    # Legacy style: (hidden_dim, layer_dim, G, adj_in, adj_out)
+    required = ("G", "adj_in", "adj_out")
+    if all(name in graph_inputs for name in required):
+        hidden_dim = getattr(config, "hidden_dim")
+        layer_dim = getattr(config, "num_layers")
+        return model_cls(
+            hidden_dim,
+            layer_dim,
+            graph_inputs["G"],
+            graph_inputs["adj_in"],
+            graph_inputs["adj_out"],
+        )
+
+    raise TypeError(
+        f"Unsupported model constructor for {model_cls.__name__}. "
+        f"__init__ params={param_names}; graph_inputs keys={sorted(graph_inputs.keys())}"
+    )
+
+
 def main() -> None:
     args = parse_args()
     device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
@@ -133,7 +171,7 @@ def main() -> None:
         for key, value in graph_inputs.items()
     }
 
-    model = ModelClass(config, graph_inputs).to(device)
+    model = build_model(ModelClass, config, graph_inputs).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
     model_dir = os.path.join(KT_ROOT, "model", config.dataset)

@@ -85,8 +85,19 @@ def build_hypergraph_inputs(config: TrainConfig) -> Dict[str, torch.Tensor]:
     dv[dv == 0.0] = 1.0
     de[de == 0.0] = 1.0
 
+    dv_inv_sqrt = np.power(dv, -0.5)
+    de_inv = np.power(de, -1.0)
+
+    # Sparse construction of G = Dv^{-1/2} * H * De^{-1} * H^T * Dv^{-1/2}
+    # Avoid forming a dense (2Q x 2Q) matrix.
+    dv_mat = sp.diags(dv_inv_sqrt, format="csr")
+    de_mat = sp.diags(de_inv, format="csr")
+    g_sp = dv_mat.dot(incidence.tocsr()).dot(de_mat).dot(incidence.tocsr().transpose()).dot(dv_mat)
+    g_sp = g_sp.tocoo()
+
     return {
+        "G": _to_torch_sparse(g_sp),
         "incidence": _to_torch_sparse(incidence),
-        "dv_inv_sqrt": torch.tensor(np.power(dv, -0.5), dtype=torch.float32).unsqueeze(1),
-        "de_inv": torch.tensor(np.power(de, -1.0), dtype=torch.float32).unsqueeze(1),
+        "dv_inv_sqrt": torch.tensor(dv_inv_sqrt, dtype=torch.float32).unsqueeze(1),
+        "de_inv": torch.tensor(de_inv, dtype=torch.float32).unsqueeze(1),
     }
