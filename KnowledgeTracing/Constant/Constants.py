@@ -180,7 +180,10 @@ def _compute_from_raw(dataset_name: str) -> Tuple[Optional[int], Optional[int]]:
 
 
 def _compute_num_questions_from_h(dataset_name: str) -> Optional[int]:
-    """Read incidence matrix H and infer question count from its row size."""
+    """Read incidence matrix H and infer question count from its row size.
+
+    In this repo's H files, row count is typically 2 * num_questions.
+    """
     root = _repo_root()
     h_key = _H_MAP.get(dataset_name)
     if not h_key:
@@ -191,7 +194,12 @@ def _compute_num_questions_from_h(dataset_name: str) -> Optional[int]:
     h_df = pd.read_csv(h_path, header=None)
     if h_df.empty:
         return None
-    return int(h_df.shape[0])
+    row_cnt = int(h_df.shape[0])
+    if row_cnt % 2 != 0:
+        raise ValueError(
+            f"H file row count must be even, got {row_cnt} for dataset={dataset_name} ({h_path})"
+        )
+    return row_cnt // 2
 
 
 def ensure_dataset_stats(dataset_name: str) -> None:
