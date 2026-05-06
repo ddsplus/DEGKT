@@ -1,24 +1,40 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DGEKT 模型训练脚本
+支持多个数据集：assist2009, assist2012, assist2017, statics2011, xes3g5m
+含10轮早停逻辑和每个数据集单独文件夹保存最佳模型
+"""
 import sys
+import os
+
+# Bootstrap import paths - handle running from any directory
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+KT_ROOT = os.path.dirname(THIS_DIR)
+REPO_ROOT = os.path.dirname(KT_ROOT)
+for p in (REPO_ROOT, KT_ROOT):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+# Now safe to import KnowledgeTracing modules
 from KnowledgeTracing.DirectedGCN.load_data import get_adj
 from KnowledgeTracing.hgnn_models import hypergraph_utils as hgut
 from KnowledgeTracing.model.Model import DKT
 from KnowledgeTracing.data.dataloader import getLoader
 from KnowledgeTracing.Constant import Constants as C
-from torch import optim as optima
 from KnowledgeTracing.evaluation import eval
+from torch import optim as optima
 import torch
 import logging
 from datetime import datetime
 import numpy as np
 import warnings
-import os
 import random
 import pandas as pd
 
 warnings.filterwarnings('ignore')
 
 torch.cuda.set_device(0)
-sys.path.append('../')
 
 '''check cuda'''
 use_gpu = torch.cuda.is_available()
@@ -61,7 +77,12 @@ trainLoaders, testLoaders = getLoader(C.DATASET)
 loss_func = eval.lossFunc(C.HIDDEN, C.MAX_STEP, device)
 
 def KTtrain():
-    adj = hgut.generate_G_from_H(pd.read_csv(r'../../Dataset/H/' + C.H + '.csv', header=None))
+    # Create dataset-specific model directory
+    model_dir = os.path.join(os.path.dirname(__file__), '..', 'model', C.DATASET)
+    os.makedirs(model_dir, exist_ok=True)
+    logger.info(f'Model directory: {model_dir}')
+    
+    adj = hgut.generate_G_from_H(pd.read_csv(r'../Dataset/H/' + C.H + '.csv', header=None))
     G = adj.cuda()
     adj_out, adj_in = get_adj()
     adj_in = adj_in.cuda()
@@ -72,6 +93,9 @@ def KTtrain():
     best_auc = 0.0
     best_epoch = 0
     best_acc = 0.0
+    patience = 10  # Early stopping patience - 10 epochs without improvement
+    patience_counter = 0  # Counter for epochs without improvement
+    
     for epoch in range(C.EPOCH):
         print('epoch: ' + str(epoch + 1) + '            lr = ', optimizer.param_groups[0]["lr"])
         model, optimizer = eval.train_epoch(model, trainLoaders, optimizer,
@@ -79,13 +103,36 @@ def KTtrain():
         logger.info(f'epoch {epoch + 1}')
         with torch.no_grad():
             auc, acc = eval.test_epoch(model, testLoaders, loss_func, device)
+            
             if best_auc < auc:
                 best_auc = auc
                 best_acc = acc
                 best_epoch = epoch + 1
-                torch.save(model, '../model/save' + C.H + 'model.pkl')
+                patience_counter = 0  # Reset patience counter
+                
+                # Save best model with descriptive filename
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                model_filename = f'best_model_{C.DATASET}_{best_epoch}_{timestamp}_auc{best_auc:.4f}_acc{best_acc:.4f}.pkl'
+                model_path = os.path.join(model_dir, model_filename)
+                torch.save(model, model_path)
+                print(f'✓ Best model saved: {model_filename}')
+                logger.info(f'Best model saved: {model_filename}')
+            else:
+                patience_counter += 1
+                logger.info(f'No improvement. Patience: {patience_counter}/{patience}')
 
-            print('Best auc at present: %f  acc:  %f  Best epoch: %d' % (best_auc, best_acc, best_epoch))
+            print('Best auc at present: %f  acc:  %f  Best epoch: %d (patience: %d/%d)' % (best_auc, best_acc, best_epoch, patience_counter, patience))
+            
+            # Early stopping check
+            if patience_counter >= patience:
+                print(f'\n=== Early stopping triggered ===')
+                print(f'No improvement for {patience} consecutive epochs')
+                logger.info(f'Early stopping at epoch {epoch + 1} after {patience} epochs without improvement')
+                break
+    
+    print(f'\n=== Training completed ===')
+    print(f'Best AUC: {best_auc:.4f}, Best ACC: {best_acc:.4f} at epoch {best_epoch}')
+    logger.info(f'Training completed. Best AUC: {best_auc:.4f}, Best ACC: {best_acc:.4f} at epoch {best_epoch}')
 
 def KTtest():
     model = torch.load('../model/save2017model.pkl')
@@ -98,8 +145,3 @@ def KTtest():
 
 KTtrain()
 # KTtest()
-
-
-
-
-
