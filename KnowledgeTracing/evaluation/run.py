@@ -24,7 +24,18 @@ from KnowledgeTracing.Constant.Constants import SUPPORTED_DATASETS, build_config
 from KnowledgeTracing.DirectedGCN.load_data import build_hypergraph_inputs, build_transition_adjacency  # noqa: E402
 from KnowledgeTracing.data.dataloader import get_loaders  # noqa: E402
 from KnowledgeTracing.evaluation.eval import evaluate, train_epoch  # noqa: E402
-from KnowledgeTracing.model.Model import DGEKT  # noqa: E402
+from KnowledgeTracing.model import Model as model_module  # noqa: E402
+
+if hasattr(model_module, "DGEKT"):
+    ModelClass = model_module.DGEKT
+elif hasattr(model_module, "DKT"):
+    ModelClass = model_module.DKT
+else:
+    exported = [name for name in dir(model_module) if not name.startswith("_")]
+    raise ImportError(
+        "KnowledgeTracing/model/Model.py must define `DGEKT` or `DKT`. "
+        f"Available symbols: {exported}"
+    )
 
 
 def parse_args():
@@ -121,7 +132,7 @@ def main() -> None:
         for key, value in graph_inputs.items()
     }
 
-    model = DGEKT(config, graph_inputs).to(device)
+    model = ModelClass(config, graph_inputs).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
     model_dir = os.path.join(KT_ROOT, "model", config.dataset)
