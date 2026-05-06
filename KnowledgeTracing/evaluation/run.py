@@ -1,69 +1,53 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-DGEKT 模型训练脚本
-支持多个数据集：assist2009, assist2012, assist2017, statics2011, xes3g5m
-含10轮早停逻辑和每个数据集单独文件夹保存最佳模型
-"""
-import sys
-import os
 
-# Bootstrap import paths - handle running from any directory
+import argparse
+import json
+import logging
+import os
+import random
+import sys
+from datetime import datetime
+
+import numpy as np
+import torch
+
+
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 KT_ROOT = os.path.dirname(THIS_DIR)
 REPO_ROOT = os.path.dirname(KT_ROOT)
-for p in (REPO_ROOT, KT_ROOT):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+for path in (REPO_ROOT, KT_ROOT):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
-# Now safe to import KnowledgeTracing modules
-from KnowledgeTracing.DirectedGCN.load_data import get_adj
-from KnowledgeTracing.hgnn_models import hypergraph_utils as hgut
-from KnowledgeTracing.model.Model import DKT
-from KnowledgeTracing.data.dataloader import getLoader
-from KnowledgeTracing.Constant import Constants as C
-from KnowledgeTracing.evaluation import eval
-from torch import optim as optima
-import torch
-import logging
-from datetime import datetime
-import numpy as np
-import warnings
-import random
-import pandas as pd
+from KnowledgeTracing.Constant.Constants import SUPPORTED_DATASETS, build_config  # noqa: E402
+from KnowledgeTracing.DirectedGCN.load_data import build_hypergraph_inputs, build_transition_adjacency  # noqa: E402
+from KnowledgeTracing.data.dataloader import get_loaders  # noqa: E402
+from KnowledgeTracing.evaluation.eval import evaluate, train_epoch  # noqa: E402
+from KnowledgeTracing.model import DGEKT  # noqa: E402
 
-warnings.filterwarnings('ignore')
 
-'''check cuda'''
-use_gpu = torch.cuda.is_available()
-device = torch.device('cuda' if use_gpu else 'cpu')
-if use_gpu:
-    torch.cuda.set_device(0)
-print('GPU state: ', use_gpu)
-print('Dataset: ' + C.DATASET + ', Ques number: ' + str(C.NUM_OF_QUESTIONS) + '\n')
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train graph-enhanced knowledge tracing model.")
+    parser.add_argument("--dataset", required=True, choices=SUPPORTED_DATASETS)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--emb-dim", type=int, default=128)
+    parser.add_argument("--hidden-dim", type=int, default=128)
+    parser.add_argument("--num-layers", type=int, default=1)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--kd-weight", type=float, default=5e-6)
+    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--cpu", action="store_true", help="Force CPU training")
+    return parser.parse_args()
 
-''' save log '''
-logger = logging.getLogger('main')
-logger.setLevel(level=logging.DEBUG)
-date = datetime.now()
-handler = logging.FileHandler(
-    f'log/{date.year}_{date.month}_{date.day}_result.log')
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-logger.info('This is a new training log')
-logger.info('\nDataset: ' + str(C.DATASET) + ', Ques number: ' + str(C.NUM_OF_QUESTIONS) + ', Batch_size: ' + str(
-    C.BATCH_SIZE))
 
-'''set random seed'''
-
-def set_seed(seed):
+def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0,2'
-    os.environ['PYTHONHASHSEED'] = str(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
@@ -71,140 +55,115 @@ def set_seed(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-set_seed(216)
 
-def validate_dataset_dimensions():
-    report = C.dataset_dimension_report(C.DATASET)
+def create_logger(log_dir: str) -> logging.Logger:
+    os.makedirs(log_dir, exist_ok=True)
+    logger = logging.getLogger("dgekt")
+    logger.handlers.clear()
+    logger.setLevel(logging.INFO)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_handler = logging.FileHandler(os.path.join(log_dir, f"{timestamp}_train.log"), encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logger.addHandler(file_handler)
+    logger.addHandler(logging.StreamHandler(sys.stdout))
+    return logger
 
-    print('Dataset dimension report:')
-    print(
-        '  pid_q_range: min={0}, max={1}, unique={2}'.format(
-            report['pid_q_min'], report['pid_q_max'], report['pid_q_unique']
-        )
+
+def save_checkpoint(model, config, metrics_dict, output_dir: str, epoch: int) -> str:
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = (
+        f"best_model_{config.dataset}_epoch{epoch}_"
+        f"auc{metrics_dict['auc']:.4f}_acc{metrics_dict['acc']:.4f}_{timestamp}.pt"
     )
-    print(
-        '  configured_q: {0}'.format(C.NUM_OF_QUESTIONS)
+    path = os.path.join(output_dir, filename)
+    payload = {
+        "model_state": model.state_dict(),
+        "config": config.__dict__,
+        "metrics": metrics_dict,
+        "epoch": epoch,
+    }
+    torch.save(payload, path)
+    return path
+
+
+def main() -> None:
+    args = parse_args()
+    device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
+    set_seed(args.seed)
+
+    config = build_config(
+        args.dataset,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        learning_rate=args.lr,
+        emb_dim=args.emb_dim,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
+        kd_weight=args.kd_weight,
+        patience=args.patience,
+        seed=args.seed,
+        num_workers=args.num_workers,
     )
-    print(
-        '  h_shape: rows={0}, cols={1}, inferred_q={2}'.format(
-            report['h_rows'], report['h_cols'], report['h_q_count']
-        )
-    )
-    print(
-        '  pid_encoding: {0}'.format(report['pid_encoding'])
-    )
-    logger.info(
-        'Dataset dimension report - pid_q_min=%s pid_q_max=%s pid_q_unique=%s configured_q=%s h_rows=%s h_cols=%s h_q_count=%s pid_encoding=%s',
-        report['pid_q_min'],
-        report['pid_q_max'],
-        report['pid_q_unique'],
-        C.NUM_OF_QUESTIONS,
-        report['h_rows'],
-        report['h_cols'],
-        report['h_q_count'],
-        report['pid_encoding'],
-    )
 
-    if report['h_error'] is not None:
-        print('  h_note: {0}'.format(report['h_error']))
-        logger.info('H validation note: %s', report['h_error'])
-        if report['h_q_count'] is None:
-            raise ValueError(report['h_error'])
+    logger = create_logger(os.path.join(KT_ROOT, "log"))
+    logger.info("Device: %s", device)
+    logger.info("Config: %s", json.dumps(config.__dict__, ensure_ascii=False))
 
-    pid_q_max = report['pid_q_max']
-    pid_encoding = report['pid_encoding']
-    if pid_encoding == 'invalid':
-        raise ValueError(
-            f'PID question id range is incompatible with configured question count for dataset={C.DATASET}: '
-            f'pid_q_max={pid_q_max}, configured_q={C.NUM_OF_QUESTIONS}.'
-        )
+    train_loader, test_loader = get_loaders(config)
+    logger.info("Train batches: %d | Test batches: %d", len(train_loader), len(test_loader))
 
-    h_q_count = report['h_q_count']
-    if h_q_count is not None and int(h_q_count) != int(C.NUM_OF_QUESTIONS):
-        raise ValueError(
-            f'H-derived question count mismatches configured question count for dataset={C.DATASET}: '
-            f'h_q_count={h_q_count}, configured_q={C.NUM_OF_QUESTIONS}. '
-            f'Please regenerate H or correct NUM_OF_QUESTIONS.'
-        )
+    graph_inputs = build_transition_adjacency(config)
+    graph_inputs.update(build_hypergraph_inputs(config))
+    graph_inputs = {
+        key: value.to(device) if torch.is_tensor(value) else value
+        for key, value in graph_inputs.items()
+    }
 
+    model = DGEKT(config, graph_inputs).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
-validate_dataset_dimensions()
-trainLoaders, testLoaders = getLoader(C.DATASET)
-loss_func = eval.lossFunc(C.HIDDEN, C.MAX_STEP, device)
-
-def KTtrain():
-    # Create dataset-specific model directory
-    model_dir = os.path.join(os.path.dirname(__file__), '..', 'model', C.DATASET)
-    os.makedirs(model_dir, exist_ok=True)
-    logger.info(f'Model directory: {model_dir}')
-    
-    adj = hgut.generate_G_from_H(C.load_h_matrix(C.DATASET))
-    G = adj.cuda()
-    expected_g_dim = int(2 * C.NUM_OF_QUESTIONS)
-    if int(G.shape[0]) != expected_g_dim:
-        raise ValueError(
-            f'Graph/input dimension mismatch for dataset={C.DATASET}: '
-            f'G.shape[0]={int(G.shape[0])}, but 2*NUM_OF_QUESTIONS={expected_g_dim}. '
-            f'Please regenerate H or correct NUM_OF_QUESTIONS.'
-        )
-    adj_out, adj_in = get_adj()
-    adj_in = adj_in.cuda()
-    adj_out = adj_out.cuda()
-    model = DKT(C.HIDDEN, C.LAYERS, G, adj_out, adj_in).cuda()
-    optimizer = optima.Adam(model.parameters(), lr=C.LR)
-
-    best_auc = 0.0
+    model_dir = os.path.join(KT_ROOT, "model", config.dataset)
+    best_auc = -1.0
     best_epoch = 0
-    best_acc = 0.0
-    patience = 10  # Early stopping patience - 10 epochs without improvement
-    patience_counter = 0  # Counter for epochs without improvement
-    
-    for epoch in range(C.EPOCH):
-        print('epoch: ' + str(epoch + 1) + '            lr = ', optimizer.param_groups[0]["lr"])
-        model, optimizer = eval.train_epoch(model, trainLoaders, optimizer,
-                                            loss_func)
-        logger.info(f'epoch {epoch + 1}')
-        with torch.no_grad():
-            auc, acc = eval.test_epoch(model, testLoaders, loss_func, device)
-            
-            if best_auc < auc:
-                best_auc = auc
-                best_acc = acc
-                best_epoch = epoch + 1
-                patience_counter = 0  # Reset patience counter
-                
-                # Save best model with descriptive filename
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                model_filename = f'best_model_{C.DATASET}_{best_epoch}_{timestamp}_auc{best_auc:.4f}_acc{best_acc:.4f}.pkl'
-                model_path = os.path.join(model_dir, model_filename)
-                torch.save(model, model_path)
-                print(f'✓ Best model saved: {model_filename}')
-                logger.info(f'Best model saved: {model_filename}')
-            else:
-                patience_counter += 1
-                logger.info(f'No improvement. Patience: {patience_counter}/{patience}')
+    best_path = ""
+    stale_epochs = 0
 
-            print('Best auc at present: %f  acc:  %f  Best epoch: %d (patience: %d/%d)' % (best_auc, best_acc, best_epoch, patience_counter, patience))
-            
-            # Early stopping check
-            if patience_counter >= patience:
-                print(f'\n=== Early stopping triggered ===')
-                print(f'No improvement for {patience} consecutive epochs')
-                logger.info(f'Early stopping at epoch {epoch + 1} after {patience} epochs without improvement')
-                break
-    
-    print(f'\n=== Training completed ===')
-    print(f'Best AUC: {best_auc:.4f}, Best ACC: {best_acc:.4f} at epoch {best_epoch}')
-    logger.info(f'Training completed. Best AUC: {best_auc:.4f}, Best ACC: {best_acc:.4f} at epoch {best_epoch}')
+    for epoch in range(1, config.epochs + 1):
+        train_loss = train_epoch(model, train_loader, optimizer, device, config)
+        test_metrics = evaluate(model, test_loader, device, config)
 
-def KTtest():
-    model = torch.load('../model/save2017model.pkl')
-    print('loading the best model...')
-    with torch.no_grad():
-        eval.test_epoch(model, testLoaders, loss_func, device)
+        logger.info(
+            "Epoch %d/%d | train_loss=%.6f | test_loss=%.6f | test_auc=%.6f | test_acc=%.6f",
+            epoch,
+            config.epochs,
+            train_loss,
+            test_metrics["loss"],
+            test_metrics["auc"],
+            test_metrics["acc"],
+        )
+        print(
+            f"Epoch {epoch}/{config.epochs} | train_loss={train_loss:.6f} | "
+            f"test_auc={test_metrics['auc']:.6f} | test_acc={test_metrics['acc']:.6f}"
+        )
+
+        if test_metrics["auc"] > best_auc:
+            best_auc = test_metrics["auc"]
+            best_epoch = epoch
+            stale_epochs = 0
+            best_path = save_checkpoint(model, config, test_metrics, model_dir, epoch)
+            logger.info("Best model updated: %s", best_path)
+        else:
+            stale_epochs += 1
+
+        if stale_epochs >= config.patience:
+            logger.info("Early stopping at epoch %d after %d stale epochs.", epoch, stale_epochs)
+            break
+
+    logger.info("Training complete | best_epoch=%d | best_auc=%.6f | checkpoint=%s", best_epoch, best_auc, best_path)
+    print(f"Best epoch: {best_epoch} | best_auc={best_auc:.6f} | checkpoint={best_path}")
 
 
-
-
-KTtrain()
-# KTtest()
+if __name__ == "__main__":
+    main()

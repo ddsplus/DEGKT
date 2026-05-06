@@ -1,109 +1,92 @@
 # -*- coding: utf-8 -*-
-# @Time : 2022/4/28 19:18
-# @Author : Yumo
-# @File : eval.py
-# @Project: GOODKT
-# @Comment :
-import tqdm
+
+from typing import Dict, Tuple
+
 import torch
-from KnowledgeTracing.Constant import Constants as C
-import torch.nn as nn
+import torch.nn.functional as F
 from sklearn import metrics
-import logging
 
-logger = logging.getLogger('main.eval')
-
-
-def performance(ground_truth, prediction):
-    fpr, tpr, thresholds = metrics.roc_curve(ground_truth.detach().cpu().numpy(),
-                                             prediction.detach().cpu().numpy())
-    auc = metrics.auc(fpr, tpr)
-    acc = metrics.accuracy_score(ground_truth.detach().cpu().numpy(), torch.round(prediction).detach().cpu().numpy())
-    logger.info('\nauc: ' + str(auc) + 'acc: ' + str(acc))
-    print('auc: ' + str(auc) + ' acc: ' + str(acc))
-    return auc, acc
+from KnowledgeTracing.Constant.Constants import TrainConfig
 
 
-class lossFunc(nn.Module):
-    def __init__(self, hidden, max_step, device):
-        super(lossFunc, self).__init__()
-        self.crossEntropy = nn.BCELoss()
-        self.q = C.NUM_OF_QUESTIONS
-        self.hidden = hidden
-        self.sig = nn.Sigmoid()
-        self.max_step = max_step
-        self.device = device
-        self.mse = nn.MSELoss()
+def compute_loss(outputs: Dict[str, torch.Tensor], config: TrainConfig) -> Tuple[torch.Tensor, Dict[str, float]]:
+    mask = outputs["mask"]
+    if mask.sum().item() == 0:
+        raise ValueError("Encountered a batch with no valid prediction targets.")
 
-    def forward(self, logit_c, logit_t, logit_ensemble, batch):
+    target = outputs["target"][mask]
+    logit_h = outputs["logit_h"][mask]
+    logit_g = outputs["logit_g"][mask]
+    logit_e = outputs["logit_e"][mask]
 
-        p_c = self.sig(logit_c)
-        p_t = self.sig(logit_t)
-        p_enm = self.sig(logit_ensemble)
-        '''kd_loss'''
-        T = 0.5
-        p0_c = self.sig(logit_c/T)
-        p0_t = self.sig(logit_t/T)
-        p0_enm = self.sig(logit_ensemble/T)
-        loss_kd = C.kd_loss * (torch.sum(torch.abs(p0_enm-p0_c)) + torch.sum(torch.abs(p0_enm-p0_t)))
-        loss = torch.tensor([0.0], device=self.device)
-        prediction = torch.tensor([], device=self.device)
-        ground_truth = torch.tensor([], device=self.device)
+    loss_h = F.binary_cross_entropy_with_logits(logit_h, target)
+    loss_g = F.binary_cross_entropy_with_logits(logit_g, target)
+    loss_e = F.binary_cross_entropy_with_logits(logit_e, target)
 
-        for student in range(batch.shape[0]):
-            delta = batch[student][:, :self.q] + batch[student][:, self.q:]
-
-            a = (((batch[student][:, 0:self.q] -
-                   batch[student][:, self.q:]).sum(1) + 1) //
-                 2)[1:]  # [49]
-            temp_c = p_c[student][:self.max_step - 1].mm(delta[1:].t())
-            temp_t = p_t[student][:self.max_step - 1].mm(delta[1:].t())
-            temp_enm = p_enm[student][:self.max_step - 1].mm(delta[1:].t())
-            index = torch.tensor([[i for i in range(self.max_step - 1)]],
-                                 dtype=torch.long, device=self.device)
-            pc = temp_c.gather(0, index)[0]
-            pt = temp_t.gather(0, index)[0]
-            penm = temp_enm.gather(0, index)[0]
-            for i in range(len(pc) - 1, -1, -1):
-                if pc[i] > 0:
-                    pc = pc[:i + 1]
-                    pt = pt[:i + 1]
-                    penm = penm[:i + 1]
-                    a = a[:i + 1]
-                    break
-            loss = loss + self.crossEntropy(pt, a) + self.crossEntropy(pc, a)+ self.crossEntropy(penm, a)
-            p_mean = (pt + pc + penm)/3.0
-            prediction = torch.cat([prediction, p_mean])
-            ground_truth = torch.cat([ground_truth, a])
-        return loss, loss_kd,  prediction, ground_truth
+    prob_h = torch.sigmoid(logit_h)
+    prob_g = torch.sigmoid(logit_g)
+    prob_e = torch.sigmoid(logit_e)
+    kd = config.kd_weight * (
+        F.mse_loss(prob_h, prob_e.detach()) + F.mse_loss(prob_g, prob_e.detach())
+    )
+    total = loss_h + loss_g + loss_e + kd
+    return total, {
+        "loss_h": float(loss_h.detach().cpu()),
+        "loss_g": float(loss_g.detach().cpu()),
+        "loss_e": float(loss_e.detach().cpu()),
+        "kd": float(kd.detach().cpu()),
+    }
 
 
-def train_epoch(model, trainLoader, optimizer, loss_func):
-    for batch in tqdm.tqdm(trainLoader, desc='Training:    ', mininterval=2):
-        batch = batch.to(loss_func.device, non_blocking=True)
-        logit_c, logit_t, logit_ensemble = model(batch)
-        loss, loss_kd,  prediction, ground_truth = loss_func(logit_c, logit_t, logit_ensemble, batch)
-        total_loss = loss + loss_kd
+def move_batch_to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
+    return {key: value.to(device, non_blocking=True) for key, value in batch.items()}
+
+
+def train_epoch(model, loader, optimizer, device: torch.device, config: TrainConfig) -> float:
+    model.train()
+    total_loss = 0.0
+    num_batches = 0
+    for batch in loader:
+        batch = move_batch_to_device(batch, device)
+        outputs = model(batch)
+        loss, _ = compute_loss(outputs, config)
         optimizer.zero_grad()
-        total_loss.backward(retain_graph=True)
+        loss.backward()
         optimizer.step()
+        total_loss += float(loss.detach().cpu())
+        num_batches += 1
+    return total_loss / max(1, num_batches)
 
-    return model, optimizer
 
+@torch.no_grad()
+def evaluate(model, loader, device: torch.device, config: TrainConfig) -> Dict[str, float]:
+    model.eval()
+    all_targets = []
+    all_probs = []
+    total_loss = 0.0
+    num_batches = 0
 
-def test_epoch(model, testLoader, loss_func, device):
-    global loss_kd, total_loss
-    ground_truth = torch.tensor([],device=device)
-    prediction = torch.tensor([],device=device)
-    loss = torch.tensor([],device=device)
-    for batch in tqdm.tqdm(testLoader, desc='Testing:     ', mininterval=2):
-        batch = batch.to(device, non_blocking=True)
-        logit_c, logit_t, logit_ensemble = model(batch)
-        loss, loss_kd, p, a = loss_func(logit_c, logit_t, logit_ensemble, batch)
-        total_loss = loss + loss_kd
-        prediction = torch.cat([prediction, p])
-        ground_truth = torch.cat([ground_truth, a])
-    print('loss:', loss.item(), '   kd_loss:', loss_kd.item())
-    print('Total loss:', total_loss.item())
-    return performance(ground_truth, prediction)
+    for batch in loader:
+        batch = move_batch_to_device(batch, device)
+        outputs = model(batch)
+        loss, _ = compute_loss(outputs, config)
+        mask = outputs["mask"]
+        probs = torch.sigmoid(outputs["logit_e"][mask])
+        targets = outputs["target"][mask]
+        all_probs.append(probs.detach().cpu())
+        all_targets.append(targets.detach().cpu())
+        total_loss += float(loss.detach().cpu())
+        num_batches += 1
 
+    if not all_targets:
+        raise ValueError("No evaluation targets were collected.")
+
+    y_true = torch.cat(all_targets).numpy()
+    y_prob = torch.cat(all_probs).numpy()
+    auc = metrics.roc_auc_score(y_true, y_prob)
+    acc = metrics.accuracy_score(y_true, (y_prob >= 0.5).astype(int))
+    return {
+        "loss": total_loss / max(1, num_batches),
+        "auc": float(auc),
+        "acc": float(acc),
+    }

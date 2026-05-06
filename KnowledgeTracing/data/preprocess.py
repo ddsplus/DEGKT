@@ -1,57 +1,54 @@
 # -*- coding: utf-8 -*-
-# @Time : 2022/4/28 19:18
-# @Author : Yumo
-# @File : preprocess.py
-# @Project: GOODKT
-# @Comment :
-import numpy as np
-import itertools
-import tqdm
+
+from dataclasses import dataclass
+from typing import List
 
 
-class DataReader:
-    def __init__(self, path, maxstep):
-        self.path = path
-        self.maxstep = maxstep
+@dataclass
+class PIDRecord:
+    seq_len: int
+    question_ids: List[int]
+    skill_ids: List[int]
+    answers: List[int]
 
 
-    def getTrainData(self):
-        trainqus = np.array([])
-        trainans = np.array([])
+def parse_pid_file(path: str, max_step: int) -> List[PIDRecord]:
+    records: List[PIDRecord] = []
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        while True:
+            len_line = f.readline()
+            if not len_line:
+                break
+            q_line = f.readline()
+            s_line = f.readline()
+            a_line = f.readline()
+            if not a_line:
+                break
 
-        with open(self.path, 'r', encoding='UTF-8-sig') as train:
-            for seq_len_line, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[train] * 4), desc='loading train data:    ',
-                                                        mininterval=2):
-                ques = np.array(ques.strip().strip(',').split(',')).astype(int)
-                ans = np.array(ans.strip().strip(',').split(',')).astype(int)
-                seq_len = min(len(ques), len(ans))
-                ques = ques[:seq_len]
-                ans = ans[:seq_len]
+            seq_len = int(len_line.strip())
+            questions = [int(token.strip()) for token in q_line.strip().split(",") if token.strip()]
+            skills = [int(token.strip()) for token in s_line.strip().split(",") if token.strip()]
+            answers = [int(token.strip()) for token in a_line.strip().split(",") if token.strip()]
 
-                mod = 0 if seq_len % self.maxstep == 0 else (self.maxstep - seq_len % self.maxstep)
-                zero = np.zeros(mod) - 1
-                ques = np.append(ques, zero)
-                ans = np.append(ans, zero)
+            questions = questions[:max_step]
+            skills = skills[:max_step]
+            answers = answers[:max_step]
+            if len(questions) < max_step:
+                pad = max_step - len(questions)
+                questions.extend([-1] * pad)
+                skills.extend([-1] * pad)
+                answers.extend([-1] * pad)
 
-                trainqus = np.append(trainqus, ques).astype(int)
-                trainans = np.append(trainans, ans).astype(int)
-        return trainqus.reshape([-1, self.maxstep]), trainans.reshape([-1, self.maxstep])
+            seq_len = min(seq_len, max_step)
+            if seq_len <= 1:
+                continue
 
-    def getTestData(self):
-        testqus = np.array([])
-        testans = np.array([])
-        with open(self.path, 'r', encoding='UTF-8-sig') as test:
-            for seq_len_line, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[test] * 4), desc='loading test data:    ',
-                                                        mininterval=2):
-                ques = np.array(ques.strip().strip(',').split(',')).astype(int)
-                ans = np.array(ans.strip().strip(',').split(',')).astype(int)
-                seq_len = min(len(ques), len(ans))
-                ques = ques[:seq_len]
-                ans = ans[:seq_len]
-                mod = 0 if seq_len % self.maxstep == 0 else (self.maxstep - seq_len % self.maxstep)
-                zero = np.zeros(mod) - 1
-                ques = np.append(ques, zero)
-                ans = np.append(ans, zero)
-                testqus = np.append(testqus, ques).astype(int)
-                testans = np.append(testans, ans).astype(int)
-        return testqus.reshape([-1, self.maxstep]), testans.reshape([-1, self.maxstep])
+            records.append(
+                PIDRecord(
+                    seq_len=seq_len,
+                    question_ids=questions,
+                    skill_ids=skills,
+                    answers=answers,
+                )
+            )
+    return records

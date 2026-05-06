@@ -1,61 +1,48 @@
 # -*- coding: utf-8 -*-
-# @Time : 2022/4/28 19:18
-# @Author : Yumo
-# @File : dataloader.py
-# @Project: GOODKT
-# @Comment :
-import sys
 
-sys.path.append('../')
-import torch.utils.data as Data
-from KnowledgeTracing.Constant import Constants as C
-from KnowledgeTracing.data.preprocess import DataReader
-from KnowledgeTracing.data.OneHot import OneHot
+from typing import Dict
+
+import torch
+from torch.utils.data import DataLoader, Dataset
+
+from KnowledgeTracing.Constant.Constants import TrainConfig
+from KnowledgeTracing.data.preprocess import parse_pid_file
 
 
-def getTrainLoader(train_data_path):
-    handle = DataReader(train_data_path, C.MAX_STEP)
-    trainques, trainans = handle.getTrainData()
-    dtrain = OneHot(trainques, trainans)
-    trainLoader = Data.DataLoader(dtrain, batch_size=C.BATCH_SIZE, shuffle=True, drop_last=True)
-    return trainLoader
+class PIDSequenceDataset(Dataset):
+    def __init__(self, path: str, max_step: int):
+        self.records = parse_pid_file(path, max_step=max_step)
+        self.max_step = max_step
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
+        record = self.records[index]
+        mask = [1] * record.seq_len + [0] * (self.max_step - record.seq_len)
+        return {
+            "question_ids": torch.tensor(record.question_ids, dtype=torch.long),
+            "skill_ids": torch.tensor(record.skill_ids, dtype=torch.long),
+            "answers": torch.tensor(record.answers, dtype=torch.long),
+            "mask": torch.tensor(mask, dtype=torch.bool),
+            "seq_len": torch.tensor(record.seq_len, dtype=torch.long),
+        }
 
 
-def getTestLoader(test_data_path):
-    handle = DataReader(test_data_path, C.MAX_STEP)
-    testques, testans = handle.getTestData()
-    dtest = OneHot(testques, testans)
-    testLoader = Data.DataLoader(dtest, batch_size=C.BATCH_SIZE, shuffle=False, drop_last=True)
-    return testLoader
+def get_loader(path: str, config: TrainConfig, shuffle: bool) -> DataLoader:
+    dataset = PIDSequenceDataset(path, max_step=config.max_step)
+    return DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        shuffle=shuffle,
+        drop_last=False,
+        num_workers=config.num_workers,
+        pin_memory=True,
+    )
 
 
-def getLoader(dataset):
-    trainLoaders = []
-    testLoaders = []
-    if dataset == 'assist2009':
-        trainLoader = getTrainLoader(C.Dpath + '/assist2009/assist2009_pid_train.csv')
-        trainLoaders.append(trainLoader)
-        testLoader = getTestLoader(C.Dpath + '/assist2009/assist2009_pid_test.csv')
-        testLoaders.append(testLoader)
-    elif dataset == 'assist2017':
-        trainLoader = getTrainLoader(C.Dpath + '/assist2017/assist2017_pid_train.csv')
-        trainLoaders.append(trainLoader)
-        testLoader = getTestLoader(C.Dpath + '/assist2017/assist2017_pid_test.csv')
-        testLoaders.append(testLoader)
-    elif dataset == 'statics2011':
-        trainLoader = getTrainLoader(C.Dpath + '/statics2011/Statics2011_pid_train.csv')
-        trainLoaders.append(trainLoader)
-        testLoader = getTestLoader(C.Dpath + '/statics2011/Statics2011_pid_test.csv')
-        testLoaders.append(testLoader)
-    elif dataset == 'xes3g5m':
-        trainLoader = getTrainLoader(C.Dpath + '/xes3g5m/xes3g5m_pid_train.csv')
-        trainLoaders.append(trainLoader)
-        testLoader = getTestLoader(C.Dpath + '/xes3g5m/xes3g5m_pid_test.csv')
-        testLoaders.append(testLoader)
-    elif dataset == 'assistednet':
-        trainLoader = getTrainLoader(C.Dpath + '/assistednet/assistednet_pid_train.csv')
-        trainLoaders.append(trainLoader)
-        testLoader = getTestLoader(C.Dpath + '/assistednet/assistednet_pid_test.csv')
-        testLoaders.append(testLoader)
-
-    return trainLoaders[0], testLoaders[0]
+def get_loaders(config: TrainConfig):
+    return (
+        get_loader(config.train_pid_path, config, shuffle=True),
+        get_loader(config.test_pid_path, config, shuffle=False),
+    )

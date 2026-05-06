@@ -1,82 +1,92 @@
 # -*- coding: utf-8 -*-
-# @Time : 2022/4/28 19:18
-# @Author : Yumo
-# @File : load_data.py
-# @Project: GOODKT
-# @Comment :
+
+from collections import Counter
+from typing import Dict
+
 import numpy as np
+import pandas as pd
 import scipy.sparse as sp
-from KnowledgeTracing.Constant import Constants as C
-import tqdm
-import itertools
 import torch
-import os
+
+from KnowledgeTracing.Constant.Constants import TrainConfig
 
 
-def get_adj():
-    q = C.NUM_OF_QUESTIONS
-    resout = np.zeros((2 * q, 2 * q))
-
-    # Resolve train pid file path robustly (avoid depending on cwd; statics2011 has different filename casing)
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    dataset_dir = os.path.join(repo_root, 'Dataset', C.DATASET)
-    candidates = [
-        os.path.join(dataset_dir, f'{C.DATASET}_pid_train.csv'),
-        os.path.join(dataset_dir, 'Statics2011_pid_train.csv'),
-    ]
-    path = None
-    for cand in candidates:
-        if os.path.exists(cand):
-            path = cand
-            break
-    if path is None:
-        raise FileNotFoundError(f'Cannot find train pid file for dataset={C.DATASET} under {dataset_dir}')
-
-    with open(path, 'r', encoding='UTF-8-sig') as train:
-        for len_line, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[train] * 4), desc='Generate adjacency matrix:    ',
-                                                mininterval=2):
-            ques = np.array(ques.strip().strip(',').split(',')).astype(int)
-            ans = np.array(ans.strip().strip(',').split(',')).astype(int)
-            seq_len = min(len(ques), len(ans))
-            ques = ques[:seq_len]
-            ans = ans[:seq_len]
-            if seq_len > 1:
-                if C.PID_QUESTION_ENCODING == 'raw':
-                    for i in range(seq_len):
-                        if ans[i] == 0:
-                            ques[i] += q
-
-                for j in range(seq_len - 1):
-                    src = int(ques[j] - 1)
-                    dst = int(ques[j + 1] - 1)
-                    if src < 0 or dst < 0 or src >= 2 * q or dst >= 2 * q:
-                        continue
-                    resout[src][dst] += 1
-    resin = resout.T
-    resout = normalize(resout + sp.eye(resout.shape[0]))
-    resin = normalize(resin + sp.eye(resin.shape[0]))
-
-    resout = sparse_mx_to_torch_sparse_tensor(sp.coo_matrix(resout))
-    resin = sparse_mx_to_torch_sparse_tensor(sp.coo_matrix(resin))
-
-    return resout, resin
+def _normalize_sparse(mx: sp.spmatrix) -> sp.coo_matrix:
+    rowsum = np.array(mx.sum(1)).flatten()
+    rowsum[rowsum == 0.0] = 1.0
+    inv = 1.0 / rowsum
+    r_mat = sp.diags(inv)
+    return r_mat.dot(mx).tocoo()
 
 
-def normalize(mx):
-    """Row-normalize sparse matrix."""
-    rowsum = np.array(mx.sum(1))
-    r_inv = np.power(rowsum, -1).flatten()
-    r_inv[np.isinf(r_inv)] = 0.
-    r_mat_inv = sp.diags(r_inv)
-    mx = r_mat_inv.dot(mx)
-
-    return mx
+def _to_torch_sparse(mx: sp.coo_matrix) -> torch.Tensor:
+    mx = mx.tocoo().astype(np.float32)
+    indices = torch.from_numpy(np.vstack((mx.row, mx.col)).astype(np.int64))
+    values = torch.from_numpy(mx.data)
+    return torch.sparse_coo_tensor(indices, values, size=mx.shape).coalesce()
 
 
-def sparse_mx_to_torch_sparse_tensor(sparse_mx):
-    """Convert a scipy sparse matrix to a torch sparse tensor."""
-    sparse_mx = sparse_mx.tocoo().astype(np.float32)
-    indices = torch.from_numpy(np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
-    values = torch.from_numpy(sparse_mx.data)
-    shape = torch.Size(sparse_mx.shape)
-    return torch.sparse.FloatTensor(indices, values, shape)
+def build_transition_adjacency(config: TrainConfig) -> Dict[str, torch.Tensor]:
+    q = config.num_questions
+    edge_counter = Counter()
+
+    with open(config.train_pid_path, "r", encoding="utf-8", errors="ignore") as f:
+        while True:
+            len_line = f.readline()
+            if not len_line:
+                break
+            q_line = f.readline()
+            _ = f.readline()
+            a_line = f.readline()
+            if not a_line:
+                break
+
+            seq_len = int(len_line.strip())
+            questions = [int(token.strip()) for token in q_line.strip().split(",") if token.strip()]
+            answers = [int(token.strip()) for token in a_line.strip().split(",") if token.strip()]
+            seq_len = min(seq_len, len(questions), len(answers))
+            if seq_len <= 1:
+                continue
+
+            states = []
+            for idx in range(seq_len):
+                qid = int(questions[idx])
+                ans = int(answers[idx])
+                if qid <= 0 or ans not in (0, 1):
+                    continue
+                state = qid if ans == 1 else qid + q
+                states.append(state - 1)
+            for src, dst in zip(states[:-1], states[1:]):
+                edge_counter[(src, dst)] += 1.0
+
+    n_nodes = 2 * q
+    if edge_counter:
+        rows, cols, vals = zip(*((src, dst, weight) for (src, dst), weight in edge_counter.items()))
+        base = sp.coo_matrix((vals, (rows, cols)), shape=(n_nodes, n_nodes), dtype=np.float32)
+    else:
+        base = sp.coo_matrix((n_nodes, n_nodes), dtype=np.float32)
+    base = base + sp.eye(n_nodes, dtype=np.float32, format="coo")
+    forward = _normalize_sparse(base)
+    backward = _normalize_sparse(base.transpose())
+    return {"adj_out": _to_torch_sparse(forward), "adj_in": _to_torch_sparse(backward)}
+
+
+def build_hypergraph_inputs(config: TrainConfig) -> Dict[str, torch.Tensor]:
+    h_df = pd.read_csv(config.h_path, header=None)
+    h = h_df.values.astype(np.float32)
+    h_state = np.vstack([h, h])
+    rows, cols = np.nonzero(h_state)
+    values = h_state[rows, cols]
+    n_nodes, n_edges = h_state.shape
+
+    incidence = sp.coo_matrix((values, (rows, cols)), shape=(n_nodes, n_edges), dtype=np.float32)
+    dv = np.array(incidence.sum(axis=1)).flatten()
+    de = np.array(incidence.sum(axis=0)).flatten()
+    dv[dv == 0.0] = 1.0
+    de[de == 0.0] = 1.0
+
+    return {
+        "incidence": _to_torch_sparse(incidence),
+        "dv_inv_sqrt": torch.tensor(np.power(dv, -0.5), dtype=torch.float32).unsqueeze(1),
+        "de_inv": torch.tensor(np.power(de, -1.0), dtype=torch.float32).unsqueeze(1),
+    }
