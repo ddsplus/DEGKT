@@ -42,6 +42,16 @@ def getLoader(dataset):
         trainLoaders.append(trainLoader)
         testLoader = getTestLoader(C.Dpath + '/assist2017/assist2017_pid_test.csv')
         testLoaders.append(testLoader)
+    elif dataset == 'statics2011':
+        trainLoader = getTrainLoader(C.Dpath + '/statics2011/Statics2011_pid_train.csv')
+        trainLoaders.append(trainLoader)
+        testLoader = getTestLoader(C.Dpath + '/statics2011/Statics2011_pid_test.csv')
+        testLoaders.append(testLoader)
+    elif dataset == 'xes3g5m':
+        trainLoader = getTrainLoader(C.Dpath + '/xes3g5m/xes3g5m_pid_train.csv')
+        trainLoaders.append(trainLoader)
+        testLoader = getTestLoader(C.Dpath + '/xes3g5m/xes3g5m_pid_test.csv')
+        testLoaders.append(testLoader)
     elif dataset == 'assistednet':
         trainLoader = getTrainLoader(C.Dpath + '/assistednet/assistednet_pid_train.csv')
         trainLoaders.append(trainLoader)

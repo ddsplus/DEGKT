@@ -129,7 +129,17 @@ def _compute_from_pid(dataset_name: str) -> Tuple[Optional[int], Optional[int]]:
 
     if not q_all or not s_all:
         return None, None
-    return len(q_all), len(s_all)
+
+    q_dim = max(q_all)
+    s_dim = max(s_all)
+
+    # If ids are 0-based, allocate +1 to cover max index
+    if min(q_all) <= 0:
+        q_dim += 1
+    if min(s_all) <= 0:
+        s_dim += 1
+
+    return int(q_dim), int(s_dim)
 
 
 def _compute_from_raw(dataset_name: str) -> Tuple[Optional[int], Optional[int]]:

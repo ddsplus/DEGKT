@@ -10,12 +10,27 @@ from KnowledgeTracing.Constant import Constants as C
 import tqdm
 import itertools
 import torch
+import os
 
 
 def get_adj():
     q = C.NUM_OF_QUESTIONS
     resout = np.zeros((2 * q, 2 * q))
-    path = '../Dataset/' + C.DATASET + '/' + C.DATASET + '_pid_train.csv'
+
+    # Resolve train pid file path robustly (avoid depending on cwd; statics2011 has different filename casing)
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    dataset_dir = os.path.join(repo_root, 'Dataset', C.DATASET)
+    candidates = [
+        os.path.join(dataset_dir, f'{C.DATASET}_pid_train.csv'),
+        os.path.join(dataset_dir, 'Statics2011_pid_train.csv'),
+    ]
+    path = None
+    for cand in candidates:
+        if os.path.exists(cand):
+            path = cand
+            break
+    if path is None:
+        raise FileNotFoundError(f'Cannot find train pid file for dataset={C.DATASET} under {dataset_dir}')
 
     with open(path, 'r', encoding='UTF-8-sig') as train:
         for len, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[train] * 4), desc='Generate adjacency matrix:    ',

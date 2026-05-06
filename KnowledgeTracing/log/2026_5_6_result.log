@@ -21,3 +21,11 @@ auc: 0.6834524439388661acc: 0.6686069373115833
 2026-05-06 16:51:21,538 - main.eval - INFO - 
 auc: 0.6914465930342973acc: 0.6723484622809004
 2026-05-06 16:51:21,606 - main - INFO - Best model saved: best_model_assist2017_2_20260506_165121_auc0.6914_acc0.6723.pkl
+2026-05-06 17:05:45,374 - main - INFO - This is a new training log
+2026-05-06 17:05:45,374 - main - INFO - 
+Dataset: assist2017, Ques number: 3162, Batch_size: 256
+2026-05-06 17:05:48,552 - main - INFO - Model directory: ./evaluation/../model/assist2017
+2026-05-06 17:07:24,093 - main - INFO - epoch 1
+2026-05-06 17:07:27,088 - main.eval - INFO - 
+auc: 0.6832193799751981acc: 0.6677430501769479
+2026-05-06 17:07:27,157 - main - INFO - Best model saved: best_model_assist2017_1_20260506_170727_auc0.6832_acc0.6677.pkl
