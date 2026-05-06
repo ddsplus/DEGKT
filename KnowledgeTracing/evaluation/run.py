@@ -90,8 +90,11 @@ def validate_dataset_dimensions():
             report['h_rows'], report['h_cols'], report['h_q_count']
         )
     )
+    print(
+        '  pid_encoding: {0}'.format(report['pid_encoding'])
+    )
     logger.info(
-        'Dataset dimension report - pid_q_min=%s pid_q_max=%s pid_q_unique=%s configured_q=%s h_rows=%s h_cols=%s h_q_count=%s',
+        'Dataset dimension report - pid_q_min=%s pid_q_max=%s pid_q_unique=%s configured_q=%s h_rows=%s h_cols=%s h_q_count=%s pid_encoding=%s',
         report['pid_q_min'],
         report['pid_q_max'],
         report['pid_q_unique'],
@@ -99,17 +102,21 @@ def validate_dataset_dimensions():
         report['h_rows'],
         report['h_cols'],
         report['h_q_count'],
+        report['pid_encoding'],
     )
 
     if report['h_error'] is not None:
-        raise ValueError(report['h_error'])
+        print('  h_note: {0}'.format(report['h_error']))
+        logger.info('H validation note: %s', report['h_error'])
+        if report['h_q_count'] is None:
+            raise ValueError(report['h_error'])
 
     pid_q_max = report['pid_q_max']
-    if pid_q_max is not None and int(pid_q_max) > int(C.NUM_OF_QUESTIONS):
+    pid_encoding = report['pid_encoding']
+    if pid_encoding == 'invalid':
         raise ValueError(
-            f'PID max question id exceeds configured question count for dataset={C.DATASET}: '
-            f'pid_q_max={pid_q_max}, configured_q={C.NUM_OF_QUESTIONS}. '
-            f'Please remap pid question ids or regenerate Dataset/H/{C.H}.csv from the same mapping.'
+            f'PID question id range is incompatible with configured question count for dataset={C.DATASET}: '
+            f'pid_q_max={pid_q_max}, configured_q={C.NUM_OF_QUESTIONS}.'
         )
 
     h_q_count = report['h_q_count']
@@ -131,7 +138,7 @@ def KTtrain():
     os.makedirs(model_dir, exist_ok=True)
     logger.info(f'Model directory: {model_dir}')
     
-    adj = hgut.generate_G_from_H(pd.read_csv(r'../Dataset/H/' + C.H + '.csv', header=None))
+    adj = hgut.generate_G_from_H(C.load_h_matrix(C.DATASET))
     G = adj.cuda()
     expected_g_dim = int(2 * C.NUM_OF_QUESTIONS)
     if int(G.shape[0]) != expected_g_dim:

@@ -98,12 +98,16 @@ def _unique_counts_from_pid_file(file_path: str) -> Tuple[set, set]:
         for token in q_line.split(','):
             token = token.strip()
             if token and token.lstrip('-').isdigit():
-                q_set.add(int(token))
+                value = int(token)
+                if value > 0:
+                    q_set.add(value)
 
         for token in s_line.split(','):
             token = token.strip()
             if token and token.lstrip('-').isdigit():
-                s_set.add(int(token))
+                value = int(token)
+                if value > 0:
+                    s_set.add(value)
 
         i += 4
 
@@ -184,20 +188,69 @@ def _compute_num_questions_from_h(dataset_name: str) -> Optional[int]:
 
     In this repo's H files, row count is typically 2 * num_questions.
     """
-    root = _repo_root()
-    h_key = _H_MAP.get(dataset_name)
-    if not h_key:
-        return None
-    h_path = os.path.join(root, 'Dataset', 'H', f'{h_key}.csv')
-    if not os.path.exists(h_path):
-        return None
-    h_df = pd.read_csv(h_path, header=None)
+    h_df = load_h_matrix(dataset_name)
     if h_df.empty:
         return None
     row_cnt = int(h_df.shape[0])
     if row_cnt % 2 != 0:
         return None
     return row_cnt // 2
+
+
+def _is_header_like_row(row) -> bool:
+    values = []
+    for item in row:
+        try:
+            values.append(int(item))
+        except (TypeError, ValueError):
+            return False
+    return values == list(range(len(values)))
+
+
+def h_path(dataset_name: str) -> Optional[str]:
+    root = _repo_root()
+    h_key = _H_MAP.get(dataset_name)
+    if not h_key:
+        return None
+    return os.path.join(root, 'Dataset', 'H', f'{h_key}.csv')
+
+
+def load_h_matrix(dataset_name: str) -> pd.DataFrame:
+    path = h_path(dataset_name)
+    if path is None or not os.path.exists(path):
+        return pd.DataFrame()
+
+    h_df = pd.read_csv(path, header=None)
+    if h_df.empty:
+        return h_df
+
+    if int(h_df.shape[0]) % 2 != 0 and _is_header_like_row(h_df.iloc[0].tolist()):
+        h_df = h_df.iloc[1:].reset_index(drop=True)
+
+    return h_df
+
+
+def infer_pid_question_encoding(dataset_name: str, configured_q: Optional[int] = None) -> str:
+    train_path, test_path = _pid_paths(dataset_name)
+    q_all = set()
+    for path in (train_path, test_path):
+        if path and os.path.exists(path):
+            q_set, _ = _unique_counts_from_pid_file(path)
+            q_all |= q_set
+
+    q = configured_q
+    pid_q_max = max(q_all) if q_all else None
+
+    if q is None or pid_q_max is None:
+        return 'raw'
+
+    q = int(q)
+    pid_q_max = int(pid_q_max)
+    if pid_q_max <= q:
+        return 'raw'
+    if pid_q_max <= 2 * q:
+        return 'state_encoded'
+    return 'invalid'
 
 
 def dataset_dimension_report(dataset_name: str) -> Dict[str, Optional[object]]:
@@ -241,22 +294,31 @@ def dataset_dimension_report(dataset_name: str) -> Dict[str, Optional[object]]:
         report['pid_s_max'] = int(max(s_all))
         report['pid_s_unique'] = int(len(s_all))
 
-    root = _repo_root()
-    h_key = _H_MAP.get(dataset_name)
-    if h_key:
-        h_path = os.path.join(root, 'Dataset', 'H', f'{h_key}.csv')
-        report['h_path'] = h_path
-        if os.path.exists(h_path):
-            h_df = pd.read_csv(h_path, header=None)
-            report['h_rows'] = int(h_df.shape[0])
-            report['h_cols'] = int(h_df.shape[1])
-            if report['h_rows'] % 2 == 0:
-                report['h_q_count'] = int(report['h_rows'] // 2)
-            else:
+    current_h_path = h_path(dataset_name)
+    report['h_path'] = current_h_path
+    if current_h_path and os.path.exists(current_h_path):
+        raw_h_df = pd.read_csv(current_h_path, header=None)
+        report['h_rows'] = int(raw_h_df.shape[0])
+        report['h_cols'] = int(raw_h_df.shape[1])
+
+        h_df = load_h_matrix(dataset_name)
+        sanitized_rows = int(h_df.shape[0]) if not h_df.empty else 0
+        if sanitized_rows % 2 == 0 and sanitized_rows > 0:
+            report['h_q_count'] = int(sanitized_rows // 2)
+            if sanitized_rows != int(raw_h_df.shape[0]):
                 report['h_error'] = (
-                    f"H file row count must be even, got {report['h_rows']} "
-                    f"for dataset={dataset_name} ({h_path})"
+                    f'H file contained a header-like first row and was sanitized: '
+                    f'raw_rows={int(raw_h_df.shape[0])}, sanitized_rows={sanitized_rows}'
                 )
+        else:
+            report['h_error'] = (
+                f"H file row count must be even, got {report['h_rows']} "
+                f"for dataset={dataset_name} ({current_h_path})"
+            )
+
+    report['pid_encoding'] = infer_pid_question_encoding(
+        dataset_name, configured_q=report['configured_q']
+    )
 
     return report
 
@@ -301,6 +363,7 @@ NUM_OF_SKILLS = skill[DATASET]
 
 # Hypergraph file key under DGEKT-master/Dataset/H/
 H = _H_MAP[DATASET]
+PID_QUESTION_ENCODING = infer_pid_question_encoding(DATASET, configured_q=NUM_OF_QUESTIONS)
 
 
 MAX_STEP = 50

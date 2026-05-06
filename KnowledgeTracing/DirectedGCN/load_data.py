@@ -41,9 +41,10 @@ def get_adj():
             ques = ques[:seq_len]
             ans = ans[:seq_len]
             if seq_len > 1:
-                for i in range(seq_len):
-                    if ans[i] == 0:
-                        ques[i] += q
+                if C.PID_QUESTION_ENCODING == 'raw':
+                    for i in range(seq_len):
+                        if ans[i] == 0:
+                            ques[i] += q
 
                 for j in range(seq_len - 1):
                     src = int(ques[j] - 1)

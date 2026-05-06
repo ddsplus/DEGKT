@@ -27,8 +27,15 @@ class OneHot(Dataset):
     def onehot(self, questions, answers):
         label = torch.zeros(C.MAX_STEP, 2 * self.numofques)
         for i in range(C.MAX_STEP):
-            if answers[i] > 0:
-                label[i][questions[i]-1] = 1
-            elif answers[i] == 0:
-                label[i][self.numofques + questions[i]-1] = 1
+            qid = int(questions[i])
+            ans = int(answers[i])
+
+            if C.PID_QUESTION_ENCODING == 'state_encoded':
+                if 1 <= qid <= 2 * self.numofques:
+                    label[i][qid - 1] = 1
+            else:
+                if ans > 0 and qid > 0:
+                    label[i][qid - 1] = 1
+                elif ans == 0 and qid > 0:
+                    label[i][self.numofques + qid - 1] = 1
         return label
