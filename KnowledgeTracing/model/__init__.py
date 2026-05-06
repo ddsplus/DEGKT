@@ -1,3 +1,10 @@
-from .Model import DGEKT
+from . import Model as _model
 
-__all__ = ["DGEKT"]
+if hasattr(_model, "DGEKT"):
+    DGEKT = _model.DGEKT
+    __all__ = ["DGEKT"]
+elif hasattr(_model, "DKT"):
+    DKT = _model.DKT
+    __all__ = ["DKT"]
+else:
+    __all__ = []

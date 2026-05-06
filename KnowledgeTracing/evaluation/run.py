@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import importlib
 import json
 import logging
 import os
@@ -24,7 +25,7 @@ from KnowledgeTracing.Constant.Constants import SUPPORTED_DATASETS, build_config
 from KnowledgeTracing.DirectedGCN.load_data import build_hypergraph_inputs, build_transition_adjacency  # noqa: E402
 from KnowledgeTracing.data.dataloader import get_loaders  # noqa: E402
 from KnowledgeTracing.evaluation.eval import evaluate, train_epoch  # noqa: E402
-from KnowledgeTracing.model import Model as model_module  # noqa: E402
+model_module = importlib.import_module("KnowledgeTracing.model.Model")  # noqa: E402
 
 if hasattr(model_module, "DGEKT"):
     ModelClass = model_module.DGEKT
