@@ -24,7 +24,7 @@ from KnowledgeTracing.Constant.Constants import SUPPORTED_DATASETS, build_config
 from KnowledgeTracing.DirectedGCN.load_data import build_hypergraph_inputs, build_transition_adjacency  # noqa: E402
 from KnowledgeTracing.data.dataloader import get_loaders  # noqa: E402
 from KnowledgeTracing.evaluation.eval import evaluate, train_epoch  # noqa: E402
-from KnowledgeTracing.model import DGEKT  # noqa: E402
+from KnowledgeTracing.model.Model import DGEKT  # noqa: E402
 
 
 def parse_args():
