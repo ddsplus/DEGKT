@@ -34,11 +34,11 @@ import pandas as pd
 
 warnings.filterwarnings('ignore')
 
-torch.cuda.set_device(0)
-
 '''check cuda'''
 use_gpu = torch.cuda.is_available()
-device = torch.device('cuda')
+device = torch.device('cuda' if use_gpu else 'cpu')
+if use_gpu:
+    torch.cuda.set_device(0)
 print('GPU state: ', use_gpu)
 print('Dataset: ' + C.DATASET + ', Ques number: ' + str(C.NUM_OF_QUESTIONS) + '\n')
 
@@ -65,15 +65,64 @@ def set_seed(seed):
     os.environ['CUDA_VISIBLE_DEVICES'] = '0,2'
     os.environ['PYTHONHASHSEED'] = str(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 set_seed(216)
 
-trainLoaders, testLoaders = getLoader(C.DATASET)
+def validate_dataset_dimensions():
+    report = C.dataset_dimension_report(C.DATASET)
 
+    print('Dataset dimension report:')
+    print(
+        '  pid_q_range: min={0}, max={1}, unique={2}'.format(
+            report['pid_q_min'], report['pid_q_max'], report['pid_q_unique']
+        )
+    )
+    print(
+        '  configured_q: {0}'.format(C.NUM_OF_QUESTIONS)
+    )
+    print(
+        '  h_shape: rows={0}, cols={1}, inferred_q={2}'.format(
+            report['h_rows'], report['h_cols'], report['h_q_count']
+        )
+    )
+    logger.info(
+        'Dataset dimension report - pid_q_min=%s pid_q_max=%s pid_q_unique=%s configured_q=%s h_rows=%s h_cols=%s h_q_count=%s',
+        report['pid_q_min'],
+        report['pid_q_max'],
+        report['pid_q_unique'],
+        C.NUM_OF_QUESTIONS,
+        report['h_rows'],
+        report['h_cols'],
+        report['h_q_count'],
+    )
+
+    if report['h_error'] is not None:
+        raise ValueError(report['h_error'])
+
+    pid_q_max = report['pid_q_max']
+    if pid_q_max is not None and int(pid_q_max) > int(C.NUM_OF_QUESTIONS):
+        raise ValueError(
+            f'PID max question id exceeds configured question count for dataset={C.DATASET}: '
+            f'pid_q_max={pid_q_max}, configured_q={C.NUM_OF_QUESTIONS}. '
+            f'Please remap pid question ids or regenerate Dataset/H/{C.H}.csv from the same mapping.'
+        )
+
+    h_q_count = report['h_q_count']
+    if h_q_count is not None and int(h_q_count) != int(C.NUM_OF_QUESTIONS):
+        raise ValueError(
+            f'H-derived question count mismatches configured question count for dataset={C.DATASET}: '
+            f'h_q_count={h_q_count}, configured_q={C.NUM_OF_QUESTIONS}. '
+            f'Please regenerate H or correct NUM_OF_QUESTIONS.'
+        )
+
+
+validate_dataset_dimensions()
+trainLoaders, testLoaders = getLoader(C.DATASET)
 loss_func = eval.lossFunc(C.HIDDEN, C.MAX_STEP, device)
 
 def KTtrain():

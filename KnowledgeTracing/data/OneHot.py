@@ -25,7 +25,7 @@ class OneHot(Dataset):
         return lab
 
     def onehot(self, questions, answers):
-        label = torch.zeros(C.MAX_STEP, 2 * self.numofques).cuda()
+        label = torch.zeros(C.MAX_STEP, 2 * self.numofques)
         for i in range(C.MAX_STEP):
             if answers[i] > 0:
                 label[i][questions[i]-1] = 1

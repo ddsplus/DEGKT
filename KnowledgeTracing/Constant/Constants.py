@@ -196,10 +196,69 @@ def _compute_num_questions_from_h(dataset_name: str) -> Optional[int]:
         return None
     row_cnt = int(h_df.shape[0])
     if row_cnt % 2 != 0:
-        raise ValueError(
-            f"H file row count must be even, got {row_cnt} for dataset={dataset_name} ({h_path})"
-        )
+        return None
     return row_cnt // 2
+
+
+def dataset_dimension_report(dataset_name: str) -> Dict[str, Optional[object]]:
+    report: Dict[str, Optional[object]] = {
+        'dataset': dataset_name,
+        'pid_train_path': None,
+        'pid_test_path': None,
+        'pid_q_min': None,
+        'pid_q_max': None,
+        'pid_q_unique': None,
+        'pid_s_min': None,
+        'pid_s_max': None,
+        'pid_s_unique': None,
+        'h_path': None,
+        'h_rows': None,
+        'h_cols': None,
+        'h_q_count': None,
+        'h_error': None,
+        'configured_q': numbers.get(dataset_name),
+        'configured_s': skill.get(dataset_name),
+    }
+
+    train_path, test_path = _pid_paths(dataset_name)
+    report['pid_train_path'] = train_path
+    report['pid_test_path'] = test_path
+
+    q_all = set()
+    s_all = set()
+    for path in (train_path, test_path):
+        if path and os.path.exists(path):
+            q_set, s_set = _unique_counts_from_pid_file(path)
+            q_all |= q_set
+            s_all |= s_set
+
+    if q_all:
+        report['pid_q_min'] = int(min(q_all))
+        report['pid_q_max'] = int(max(q_all))
+        report['pid_q_unique'] = int(len(q_all))
+    if s_all:
+        report['pid_s_min'] = int(min(s_all))
+        report['pid_s_max'] = int(max(s_all))
+        report['pid_s_unique'] = int(len(s_all))
+
+    root = _repo_root()
+    h_key = _H_MAP.get(dataset_name)
+    if h_key:
+        h_path = os.path.join(root, 'Dataset', 'H', f'{h_key}.csv')
+        report['h_path'] = h_path
+        if os.path.exists(h_path):
+            h_df = pd.read_csv(h_path, header=None)
+            report['h_rows'] = int(h_df.shape[0])
+            report['h_cols'] = int(h_df.shape[1])
+            if report['h_rows'] % 2 == 0:
+                report['h_q_count'] = int(report['h_rows'] // 2)
+            else:
+                report['h_error'] = (
+                    f"H file row count must be even, got {report['h_rows']} "
+                    f"for dataset={dataset_name} ({h_path})"
+                )
+
+    return report
 
 
 def ensure_dataset_stats(dataset_name: str) -> None:

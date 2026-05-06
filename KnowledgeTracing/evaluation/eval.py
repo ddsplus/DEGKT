@@ -46,7 +46,7 @@ class lossFunc(nn.Module):
         p0_t = self.sig(logit_t/T)
         p0_enm = self.sig(logit_ensemble/T)
         loss_kd = C.kd_loss * (torch.sum(torch.abs(p0_enm-p0_c)) + torch.sum(torch.abs(p0_enm-p0_t)))
-        loss = torch.Tensor([0.0]).cuda()
+        loss = torch.tensor([0.0], device=self.device)
         prediction = torch.tensor([], device=self.device)
         ground_truth = torch.tensor([], device=self.device)
 
@@ -80,6 +80,7 @@ class lossFunc(nn.Module):
 
 def train_epoch(model, trainLoader, optimizer, loss_func):
     for batch in tqdm.tqdm(trainLoader, desc='Training:    ', mininterval=2):
+        batch = batch.to(loss_func.device, non_blocking=True)
         logit_c, logit_t, logit_ensemble = model(batch)
         loss, loss_kd,  prediction, ground_truth = loss_func(logit_c, logit_t, logit_ensemble, batch)
         total_loss = loss + loss_kd
@@ -96,6 +97,7 @@ def test_epoch(model, testLoader, loss_func, device):
     prediction = torch.tensor([],device=device)
     loss = torch.tensor([],device=device)
     for batch in tqdm.tqdm(testLoader, desc='Testing:     ', mininterval=2):
+        batch = batch.to(device, non_blocking=True)
         logit_c, logit_t, logit_ensemble = model(batch)
         loss, loss_kd, p, a = loss_func(logit_c, logit_t, logit_ensemble, batch)
         total_loss = loss + loss_kd
