@@ -20,33 +20,35 @@ class DataReader:
         trainans = np.array([])
 
         with open(self.path, 'r', encoding='UTF-8-sig') as train:
-            for len, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[train] * 4), desc='loading train data:    ',
-                                               mininterval=2):
-                len = int(len.strip().strip(','))
+            for seq_len_line, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[train] * 4), desc='loading train data:    ',
+                                                        mininterval=2):
                 ques = np.array(ques.strip().strip(',').split(',')).astype(int)
                 ans = np.array(ans.strip().strip(',').split(',')).astype(int)
+                seq_len = min(len(ques), len(ans))
+                ques = ques[:seq_len]
+                ans = ans[:seq_len]
 
-                mod = 0 if len % self.maxstep == 0 else (self.maxstep - len % self.maxstep)
+                mod = 0 if seq_len % self.maxstep == 0 else (self.maxstep - seq_len % self.maxstep)
                 zero = np.zeros(mod) - 1
                 ques = np.append(ques, zero)
                 ans = np.append(ans, zero)
 
                 trainqus = np.append(trainqus, ques).astype(int)
                 trainans = np.append(trainans, ans).astype(int)
-                trainqus = trainqus.reshape([-1, self.maxstep])
-                trainans = trainans.reshape([-1, self.maxstep])
-        return trainqus, trainans
+        return trainqus.reshape([-1, self.maxstep]), trainans.reshape([-1, self.maxstep])
 
     def getTestData(self):
         testqus = np.array([])
         testans = np.array([])
         with open(self.path, 'r', encoding='UTF-8-sig') as test:
-            for len, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[test] * 4), desc='loading test data:    ',
-                                               mininterval=2):
-                len = int(len.strip().strip(','))
+            for seq_len_line, ques, _, ans in tqdm.tqdm(itertools.zip_longest(*[test] * 4), desc='loading test data:    ',
+                                                        mininterval=2):
                 ques = np.array(ques.strip().strip(',').split(',')).astype(int)
                 ans = np.array(ans.strip().strip(',').split(',')).astype(int)
-                mod = 0 if len % self.maxstep == 0 else (self.maxstep - len % self.maxstep)
+                seq_len = min(len(ques), len(ans))
+                ques = ques[:seq_len]
+                ans = ans[:seq_len]
+                mod = 0 if seq_len % self.maxstep == 0 else (self.maxstep - seq_len % self.maxstep)
                 zero = np.zeros(mod) - 1
                 ques = np.append(ques, zero)
                 ans = np.append(ans, zero)

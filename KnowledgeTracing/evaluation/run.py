@@ -84,6 +84,13 @@ def KTtrain():
     
     adj = hgut.generate_G_from_H(pd.read_csv(r'../Dataset/H/' + C.H + '.csv', header=None))
     G = adj.cuda()
+    expected_g_dim = int(2 * C.NUM_OF_QUESTIONS)
+    if int(G.shape[0]) != expected_g_dim:
+        raise ValueError(
+            f'Graph/input dimension mismatch for dataset={C.DATASET}: '
+            f'G.shape[0]={int(G.shape[0])}, but 2*NUM_OF_QUESTIONS={expected_g_dim}. '
+            f'Please regenerate H or correct NUM_OF_QUESTIONS.'
+        )
     adj_out, adj_in = get_adj()
     adj_in = adj_in.cuda()
     adj_out = adj_out.cuda()
